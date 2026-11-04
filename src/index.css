@@ -1,0 +1,24 @@
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body, #root {
+  margin: 0; height: 100%; overflow: hidden; background: #fff;
+  overscroll-behavior: none; user-select: none; -webkit-user-select: none;
+  font-family: system-ui, sans-serif;
+}
+.board { position: fixed; inset: 0; touch-action: none; }
+.bar {
+  position: fixed; left: 8px; right: 8px;
+  bottom: calc(8px + env(safe-area-inset-bottom));
+  display: flex; align-items: center; gap: 6px; overflow-x: auto;
+  padding: 8px; background: #fff; border: 1px solid #e5e7eb;
+  border-radius: 14px; box-shadow: 0 4px 16px rgba(0,0,0,.15);
+}
+.btn {
+  flex: none; min-width: 44px; height: 44px; padding: 0 8px;
+  border: 1px solid #e5e7eb; border-radius: 10px; background: #f9fafb;
+  font-size: 18px; display: flex; align-items: center; justify-content: center;
+}
+.btn.on { background: #dbeafe; border-color: #2563eb; }
+.btn:disabled { opacity: .35; }
+.dot { flex: none; width: 32px; height: 32px; margin: 0 4px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 1px #d1d5db; }
+.dot.on { box-shadow: 0 0 0 3px #2563eb; }
+.sep { flex: none; width: 1px; height: 28px; background: #e5e7eb; margin: 0 2px; }
