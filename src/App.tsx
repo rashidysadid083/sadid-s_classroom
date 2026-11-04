@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import Konva from 'konva'
-import { Stage, Layer, Line, Rect, Ellipse, Arrow, Text, Circle } from 'react-konva'
-
+import { Stage, Layer, Group, Line, Rect, Ellipse, Arrow, Text, Circle } from 'react-konva'
 type Tool = 'select' | 'pen' | 'eraser' | 'hand' | 'text' | 'rect' | 'ellipse' | 'triangle' | 'diamond' | 'line' | 'arrow' | 'connect'
 type Kind = 'rect' | 'ellipse' | 'triangle' | 'diamond'
 type Pt = { x: number; y: number }
@@ -30,6 +29,7 @@ const COLORS = ['#111827', '#dc2626', '#2563eb', '#16a34a', '#f59e0b']
 const WIDTHS = [2, 5, 10]
 const FONT = '"Noto Sans Bengali","Hind Siliguri",system-ui,sans-serif'
 const clampScale = (s: number) => Math.max(0.1, Math.min(8, s))
+Konva.pixelRatio = Math.min(window.devicePixelRatio || 1, 2)
 
 function segDist(px: number, py: number, x1: number, y1: number, x2: number, y2: number) {
   const dx = x2 - x1, dy = y2 - y1
@@ -599,9 +599,10 @@ export default function App() {
   return (
     <>
       <div className="board" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onWheel={onWheel}>
-        <Stage width={size.w} height={size.h} x={view.x} y={view.y} scaleX={view.s} scaleY={view.s} listening={false}>
-          <Layer listening={false}>
-            {els.map(renderEl)}
+        <Stage width={size.w} height={size.h} listening={false}>
+  <Layer listening={false}>
+    <Group x={view.x} y={view.y} scaleX={view.s} scaleY={view.s}>
+    {els.map(renderEl)}
             {hoverBox && (
               <Rect x={hoverBox.x - 6 / view.s} y={hoverBox.y - 6 / view.s} width={hoverBox.w + 12 / view.s} height={hoverBox.h + 12 / view.s}
                 stroke="#16a34a" strokeWidth={2.5 / view.s} dash={[6 / view.s, 4 / view.s]} />
@@ -621,9 +622,9 @@ export default function App() {
                 )}
               </>
             )}
+            </Group>
           </Layer>
         </Stage>
-      </div>
 
       {edit && (
         <div className="editor">
