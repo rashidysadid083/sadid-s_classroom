@@ -2,14 +2,17 @@ import { useEffect, useRef, useState } from 'react'
 import Konva from 'konva'
 import { Stage, Layer, Line, Rect, Ellipse, Arrow, Text, Circle } from 'react-konva'
 
-type Tool = 'select' | 'pen' | 'eraser' | 'hand' | 'text' | 'rect' | 'ellipse' | 'triangle' | 'diamond' | 'line' | 'arrow'
+type Tool = 'select' | 'pen' | 'eraser' | 'hand' | 'text' | 'rect' | 'ellipse' | 'triangle' | 'diamond' | 'line' | 'arrow' | 'connect'
 type Kind = 'rect' | 'ellipse' | 'triangle' | 'diamond'
 type Pt = { x: number; y: number }
 type Box = { x: number; y: number; w: number; h: number }
 type Base = { id: number; color: string }
 type StrokeEl = Base & { type: 'stroke'; points: number[]; sw: number }
 type ShapeEl = Base & { type: 'shape'; kind: Kind; x: number; y: number; w: number; h: number; sw: number; fill: string | null }
-type LineEl = Base & { type: 'line'; arrow: boolean; x1: number; y1: number; x2: number; y2: number; sw: number }
+type LineEl = Base & {
+  type: 'line'; arrow: boolean; x1: number; y1: number; x2: number; y2: number; sw: number
+  conn?: boolean; a?: number; b?: number
+}
 type TextEl = Base & { type: 'text'; x: number; y: number; text: string; size: number }
 type El = StrokeEl | ShapeEl | LineEl | TextEl
 
@@ -79,6 +82,50 @@ function bbox(el: El): Box {
     y1 = Math.min(y1, el.points[i + 1]); y2 = Math.max(y2, el.points[i + 1])
   }
   return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 }
+}
+
+// ---- কানেকশন লজিক ----
+function edgePoint(el: El, toward: Pt): Pt {
+  const b = bbox(el)
+  const c = { x: b.x + b.w / 2, y: b.y + b.h / 2 }
+  const dx = toward.x - c.x, dy = toward.y - c.y
+  if (!dx && !dy) return c
+  const hw = Math.max(b.w / 2, 1), hh = Math.max(b.h / 2, 1)
+  let t: number
+  if (el.type === 'shape' && el.kind === 'ellipse') t = 1 / Math.hypot(dx / hw, dy / hh)
+  else if (el.type === 'shape' && el.kind === 'diamond') t = 1 / (Math.abs(dx) / hw + Math.abs(dy) / hh)
+  else t = Math.min(dx ? hw / Math.abs(dx) : Infinity, dy ? hh / Math.abs(dy) : Infinity)
+  t = Math.min(t, 1)
+  return { x: c.x + dx * t, y: c.y + dy * t }
+}
+
+function resolveLine(l: LineEl, list: El[]): LineEl {
+  if (l.a === undefined && l.b === undefined) return l
+  const na = l.a !== undefined ? list.find(x => x.id === l.a && x.type !== 'line') : undefined
+  const nb = l.b !== undefined ? list.find(x => x.id === l.b && x.type !== 'line') : undefined
+  const ca = na ? bbox(na) : null
+  const cb = nb ? bbox(nb) : null
+  const sa: Pt = ca ? { x: ca.x + ca.w / 2, y: ca.y + ca.h / 2 } : { x: l.x1, y: l.y1 }
+  const sb: Pt = cb ? { x: cb.x + cb.w / 2, y: cb.y + cb.h / 2 } : { x: l.x2, y: l.y2 }
+  const p1 = na ? edgePoint(na, sb) : sa
+  const p2 = nb ? edgePoint(nb, sa) : sb
+  return { ...l, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y }
+}
+
+function res(e: El, list: El[]): El {
+  return e.type === 'line' ? resolveLine(e, list) : e
+}
+
+function removeNodes(list: El[], ids: number[]): El[] {
+  const rest = list.filter(e => !ids.includes(e.id))
+  return rest.map(e => {
+    if (e.type !== 'line') return e
+    const aGone = e.a !== undefined && ids.includes(e.a)
+    const bGone = e.b !== undefined && ids.includes(e.b)
+    if (!aGone && !bGone) return e
+    const r = resolveLine(e, list)
+    return { ...e, x1: r.x1, y1: r.y1, x2: r.x2, y2: r.y2, a: aGone ? undefined : e.a, b: bGone ? undefined : e.b }
+  })
 }
 
 function hitEl(el: El, p: Pt, r: number): boolean {
@@ -158,6 +205,7 @@ export default function App() {
   const [view, setView] = useState({ x: 0, y: 0, s: 1 })
   const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight })
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [hoverId, setHoverId] = useState<number | null>(null)
   const [edit, setEdit] = useState<{ id: number | null; x: number; y: number; value: string } | null>(null)
 
   const elsRef = useRef<El[]>([])
@@ -188,11 +236,24 @@ export default function App() {
   }
   const chooseTool = (t: Tool) => { setTool(t); if (t !== 'select') select(null) }
 
+  const nodeAt = (p: Pt, exclude?: number): El | undefined => {
+    const list = elsRef.current
+    const r = 8 / viewRef.current.s
+    for (let i = list.length - 1; i >= 0; i--) {
+      const e = list[i]
+      if ((e.type === 'shape' || e.type === 'text') && e.id !== exclude) {
+        const b = bbox(e)
+        if (p.x >= b.x - r && p.x <= b.x + b.w + r && p.y >= b.y - r && p.y <= b.y + b.h + r) return e
+      }
+    }
+    return undefined
+  }
+
   const eraseAt = (p: Pt) => {
     const r = 14 / viewRef.current.s
     const cur = elsRef.current
-    const next = cur.filter(e => !hitEl(e, p, r))
-    if (next.length !== cur.length) { update(next); changed.current = true }
+    const ids = cur.filter(e => hitEl(res(e, cur), p, r)).map(e => e.id)
+    if (ids.length) { update(removeNodes(cur, ids)); changed.current = true }
   }
 
   const startGesture = () => {
@@ -216,6 +277,7 @@ export default function App() {
   const cancelAct = () => {
     const a = act.current
     act.current = null
+    setHoverId(null)
     if (!a) return
     if (a.t === 'erase') {
       if (changed.current) pushUndo(before.current)
@@ -253,7 +315,8 @@ export default function App() {
     if (tool === 'text') { act.current = { t: 'text', p }; return }
 
     if (tool === 'select') {
-      const sel = elsRef.current.find(x => x.id === selectedRef.current)
+      const sel0 = elsRef.current.find(x => x.id === selectedRef.current)
+      const sel = sel0 ? res(sel0, elsRef.current) : undefined
       if (sel) {
         const hp = handlePts(sel)
         for (let i = 0; i < hp.length; i++) {
@@ -266,7 +329,7 @@ export default function App() {
       }
       const list = elsRef.current
       for (let i = list.length - 1; i >= 0; i--) {
-        if (hitEl(list[i], p, 10 / v.s)) {
+        if (hitEl(res(list[i], list), p, 10 / v.s)) {
           const wasSel = list[i].id === selectedRef.current
           select(list[i].id)
           act.current = { t: 'move', id: list[i].id, orig: list[i], start: p, moved: false, wasSel }
@@ -275,6 +338,15 @@ export default function App() {
       }
       select(null)
       act.current = { t: 'pan' }
+      return
+    }
+
+    if (tool === 'connect') {
+      const n = nodeAt(p)
+      const id = nextId.current++
+      const el: LineEl = { id, type: 'line', arrow: true, conn: true, a: n ? n.id : undefined, b: undefined, x1: p.x, y1: p.y, x2: p.x, y2: p.y, color, sw: width }
+      update([...elsRef.current, el])
+      act.current = { t: 'create', id, start: p }
       return
     }
 
@@ -311,6 +383,7 @@ export default function App() {
     } else if (a.t === 'erase') {
       eraseAt(p)
     } else if (a.t === 'move') {
+      if (a.orig.type === 'line' && (a.orig.a !== undefined || a.orig.b !== undefined)) return
       if (!a.moved && Math.hypot(e.clientX - down.current.x, e.clientY - down.current.y) < 6) return
       a.moved = true
       replace(a.id, translate(a.orig, p.x - a.start.x, p.y - a.start.y))
@@ -321,14 +394,31 @@ export default function App() {
       replace(a.id, applyBox(a.orig, a.ob, nb, a.anchor, p))
     } else if (a.t === 'end') {
       const el = elsRef.current.find(x => x.id === a.id)
-      if (el && el.type === 'line') replace(a.id, a.i === 0 ? { ...el, x1: p.x, y1: p.y } : { ...el, x2: p.x, y2: p.y })
+      if (el && el.type === 'line') {
+        if (el.conn) {
+          const other = a.i === 0 ? el.b : el.a
+          const n = nodeAt(p, other)
+          setHoverId(n ? n.id : null)
+          replace(a.id, a.i === 0
+            ? { ...el, x1: p.x, y1: p.y, a: n ? n.id : undefined }
+            : { ...el, x2: p.x, y2: p.y, b: n ? n.id : undefined })
+        } else {
+          replace(a.id, a.i === 0 ? { ...el, x1: p.x, y1: p.y } : { ...el, x2: p.x, y2: p.y })
+        }
+      }
     } else if (a.t === 'create') {
       const el = elsRef.current.find(x => x.id === a.id)
       if (!el) return
       if (el.type === 'shape') {
         replace(a.id, { ...el, x: Math.min(a.start.x, p.x), y: Math.min(a.start.y, p.y), w: Math.abs(p.x - a.start.x), h: Math.abs(p.y - a.start.y) })
       } else if (el.type === 'line') {
-        replace(a.id, { ...el, x2: p.x, y2: p.y })
+        if (el.conn) {
+          const n = nodeAt(p, el.a)
+          setHoverId(n ? n.id : null)
+          replace(a.id, { ...el, x2: p.x, y2: p.y, b: n ? n.id : undefined })
+        } else {
+          replace(a.id, { ...el, x2: p.x, y2: p.y })
+        }
       }
     }
   }
@@ -339,6 +429,7 @@ export default function App() {
     const a = act.current
     if (!a) return
     act.current = null
+    setHoverId(null)
 
     if (a.t === 'draw') pushUndo(before.current)
     else if (a.t === 'erase') { if (changed.current) pushUndo(before.current); changed.current = false }
@@ -351,7 +442,13 @@ export default function App() {
       openEdit(null, a.p.x, a.p.y, '')
     } else if (a.t === 'create') {
       const el = elsRef.current.find(x => x.id === a.id)
-      if (el) {
+      if (!el) return
+      if (el.type === 'line' && el.conn) {
+        const len = Math.hypot(el.x2 - el.x1, el.y2 - el.y1)
+        if (el.b === undefined && len < 6 / viewRef.current.s) update(before.current)
+        else pushUndo(before.current)
+        select(null)
+      } else {
         let fixed: El = el
         if (el.type === 'shape' && el.w < 6 && el.h < 6) fixed = { ...el, x: el.x - 70, y: el.y - 45, w: 140, h: 90 }
         if (el.type === 'line' && Math.hypot(el.x2 - el.x1, el.y2 - el.y1) < 6) fixed = { ...el, x2: el.x1 + 140 }
@@ -422,14 +519,16 @@ export default function App() {
     const id = selectedRef.current
     if (id === null) return
     pushUndo(elsRef.current)
-    update(elsRef.current.filter(x => x.id !== id))
+    update(removeNodes(elsRef.current, [id]))
     select(null)
   }
 
   const duplicateSel = () => {
     const el = elsRef.current.find(x => x.id === selectedRef.current)
     if (!el) return
-    const copy = { ...translate(el, 24, 24), id: nextId.current++ } as El
+    const base = res(el, elsRef.current)
+    const copy = { ...translate(base, 24, 24), id: nextId.current++ } as El
+    if (copy.type === 'line') { copy.a = undefined; copy.b = undefined }
     pushUndo(elsRef.current)
     update([...elsRef.current, copy])
     select(copy.id)
@@ -447,12 +546,11 @@ export default function App() {
     if (!edit) return
     const v = edit.value
     if (edit.id !== null) {
+      pushUndo(elsRef.current)
       if (v.trim() === '') {
-        pushUndo(elsRef.current)
-        update(elsRef.current.filter(x => x.id !== edit.id))
+        update(removeNodes(elsRef.current, [edit.id]))
         select(null)
       } else {
-        pushUndo(elsRef.current)
         update(elsRef.current.map(x => (x.id === edit.id && x.type === 'text' ? { ...x, text: v } : x)))
       }
     } else if (v.trim() !== '') {
@@ -465,7 +563,8 @@ export default function App() {
     setEdit(null)
   }
 
-  const renderEl = (el: El) => {
+  const renderEl = (el0: El) => {
+    const el = res(el0, els)
     if (el.type === 'stroke')
       return <Line key={el.id} points={el.points} stroke={el.color} strokeWidth={el.sw} lineCap="round" lineJoin="round" tension={0.3} />
     if (el.type === 'line') {
@@ -486,8 +585,11 @@ export default function App() {
     return <Line key={el.id} points={shapePoly(el)} closed stroke={el.color} strokeWidth={el.sw} fill={fill} lineJoin="round" />
   }
 
-  const selEl = els.find(x => x.id === selectedId)
+  const selRaw = els.find(x => x.id === selectedId)
+  const selEl = selRaw ? res(selRaw, els) : undefined
   const selBox = selEl ? bbox(selEl) : null
+  const hoverEl = els.find(x => x.id === hoverId)
+  const hoverBox = hoverEl ? bbox(hoverEl) : null
   const hs = 16 / view.s
 
   const toolBtn = (t: Tool, label: string) => (
@@ -500,6 +602,10 @@ export default function App() {
         <Stage width={size.w} height={size.h} x={view.x} y={view.y} scaleX={view.s} scaleY={view.s} listening={false}>
           <Layer listening={false}>
             {els.map(renderEl)}
+            {hoverBox && (
+              <Rect x={hoverBox.x - 6 / view.s} y={hoverBox.y - 6 / view.s} width={hoverBox.w + 12 / view.s} height={hoverBox.h + 12 / view.s}
+                stroke="#16a34a" strokeWidth={2.5 / view.s} dash={[6 / view.s, 4 / view.s]} />
+            )}
             {selEl && selBox && (
               <>
                 {selEl.type !== 'line' && (
@@ -543,6 +649,7 @@ export default function App() {
           {toolBtn('diamond', '◇')}
           {toolBtn('line', '╱')}
           {toolBtn('arrow', '➜')}
+          {toolBtn('connect', '🔗')}
           {toolBtn('text', 'T')}
           <div className="sep" />
           <button className="btn" onClick={undo} disabled={!undoStack.length}>↩️</button>
@@ -571,4 +678,4 @@ export default function App() {
       </div>
     </>
   )
-                }
+    }
